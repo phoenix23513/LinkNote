@@ -1,0 +1,11 @@
+/target/
+/.idea/
+*.iml
+.DS_Store
+.linknote/
+.linknote-*.tmp
+/.maven-local/
+/.mvn/maven.config
+/outputs/
+/docs/linknote_midterm_defense_final.pptx
+/docs/linknote_midterm_talk_with_thanks.md
