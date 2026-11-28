@@ -15,6 +15,10 @@ LinkNote 是一个用 Java 21 和 JavaFX 21 开发的本地 Markdown 笔记工�
 3. 点预览里的「缓存局部性」，再点目标笔记下方「引用此笔记」里的「分块学习记录」，回到刚才的笔记。
 4. 退出应用，重新启动后点「打开文件」，选中刚才保存的 `.md`。检查标题、正文及双链仍可用。
 
+## 开发入口
+
+开发范围、约束和阶段以 [V1.2 开发计划书](docs/linknote_v1_2_development_plan.md) 为准。开工及验收使用 [开发协作流程](docs/development_workflow.md) 和 [需求与验收对照表](docs/requirements_traceability.md)。已知问题、验证证据和待评审方案见 [缺陷与验证记录](docs/quality_register.md) 与 [设计决策记录](docs/design_decisions.md)。
+
 ## 亲手验收
 
 | 操作 | 预期 |
