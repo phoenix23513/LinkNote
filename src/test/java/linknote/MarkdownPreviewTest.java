@@ -38,7 +38,7 @@ class MarkdownPreviewTest {
         var target = new Note(UUID.randomUUID(), "B", root.resolve("b.md"), null, "", "");
         var codeOnly = new Note(UUID.randomUUID(), "C", root.resolve("c.md"), null, "", "");
         var notes = List.of(source, target, codeOnly);
-        var index = new LinkIndex(new NoteCatalog(root, notes), notes, preview::wikiTargets);
+        var index = new LinkIndex(new NoteCatalog(root, notes), notes, preview::wikiReferences);
 
         assertEquals(List.of(source), index.backlinks(target));
         assertEquals(List.of(source), index.referencesToTitle("B"));
@@ -47,7 +47,7 @@ class MarkdownPreviewTest {
 
         var updated = new Note(source.id(), source.title(), source.path(), null, "", "");
         var afterSave = List.of(updated, target, codeOnly);
-        assertTrue(new LinkIndex(new NoteCatalog(root, afterSave), afterSave, preview::wikiTargets)
+        assertTrue(new LinkIndex(new NoteCatalog(root, afterSave), afterSave, preview::wikiReferences)
                 .backlinks(target).isEmpty());
     }
 

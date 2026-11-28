@@ -4,6 +4,7 @@ import linknote.model.Note;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -14,37 +15,45 @@ public final class LinkIndex {
     public record Edge(UUID sourceId, UUID targetId) {
     }
 
-    private final Map<UUID, List<Note>> incoming = new HashMap<>();
-    private final Map<String, List<Note>> titleReferences = new HashMap<>();
+    public record Reference(Note source, WikiReference link) {
+    }
 
-    public LinkIndex(NoteCatalog catalog, List<Note> notes, Function<String, List<String>> wikiTargets) {
+    private final Map<UUID, List<Reference>> incoming = new HashMap<>();
+    private final Map<String, LinkedHashSet<Note>> titleReferences = new HashMap<>();
+
+    public LinkIndex(NoteCatalog catalog, List<Note> notes, Function<String, List<WikiReference>> parseLinks) {
+        var resolutions = new HashMap<String, NoteCatalog.Resolution>();
         for (Note source : notes) {
-            for (String target : wikiTargets.apply(source.body())) {
+            for (WikiReference reference : parseLinks.apply(source.body())) {
+                String target = reference.target();
                 if (!target.contains("/")) {
-                    titleReferences.computeIfAbsent(target, ignored -> new ArrayList<>()).add(source);
+                    titleReferences.computeIfAbsent(target, ignored -> new LinkedHashSet<>()).add(source);
                 }
-                var resolution = catalog.resolve(target);
+                var resolution = resolutions.computeIfAbsent(target, catalog::resolve);
                 if (resolution.match() == NoteCatalog.Match.FOUND) {
-                    var sources = incoming.computeIfAbsent(resolution.note().id(), ignored -> new ArrayList<>());
-                    if (sources.isEmpty() || !sources.getLast().id().equals(source.id())) {
-                        sources.add(source);
-                    }
+                    incoming.computeIfAbsent(resolution.note().id(), ignored -> new ArrayList<>())
+                            .add(new Reference(source, reference));
                 }
             }
         }
     }
 
     public List<Note> backlinks(Note target) {
+        return incoming.getOrDefault(target.id(), List.of()).stream().map(Reference::source).distinct().toList();
+    }
+
+    public List<Reference> referencesTo(Note target) {
         return List.copyOf(incoming.getOrDefault(target.id(), List.of()));
     }
 
     public List<Edge> edges() {
         return incoming.entrySet().stream()
-                .flatMap(entry -> entry.getValue().stream().map(source -> new Edge(source.id(), entry.getKey())))
-                .toList();
+                .flatMap(entry -> entry.getValue().stream().map(reference -> new Edge(reference.source().id(), entry.getKey())))
+                .distinct().toList();
     }
 
     public List<Note> referencesToTitle(String title) {
-        return List.copyOf(titleReferences.getOrDefault(title, List.of()));
+        var references = titleReferences.get(title);
+        return references == null ? List.of() : List.copyOf(references);
     }
 }

@@ -5,6 +5,7 @@ import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.DialogPane;
 import javafx.scene.control.Label;
+import javafx.scene.control.ListView;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.control.TitledPane;
@@ -12,6 +13,7 @@ import javafx.scene.web.WebView;
 import javafx.stage.Stage;
 import javafx.stage.Window;
 import javafx.stage.WindowEvent;
+import linknote.storage.MarkdownNoteRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.junit.jupiter.api.io.TempDir;
@@ -91,6 +93,8 @@ class DesktopSmokeTest {
             });
 
             Path demo = vault.resolve("演示笔记.md");
+            Path renamed = vault.resolve("locality.md");
+            var originalId = new MarkdownNoteRepository(vault).read(cache).id();
             assertFalse(Files.readString(demo).contains("加粗"));
             await(() -> onFx(() -> Boolean.TRUE.equals(preview(stage).getEngine().executeScript("""
                     !!document.querySelector("table td")
@@ -122,35 +126,49 @@ class DesktopSmokeTest {
                 app.openFile(cache);
                 assertEquals("缓存局部性", title(stage).getText());
 
-                title(stage).setText("局部性");
-                var warning = answerDialog("确定", dialog -> {
-                    assertEquals("旧引用需要手动更新", dialog.getHeaderText());
-                    assertTrue(dialog.getContentText().contains("演示笔记"));
+                var form = answerDialog("查看影响", dialog -> {
+                    ((TextField) dialog.lookup("#rename-title")).setText("局部性");
+                    ((TextField) dialog.lookup("#rename-filename")).setText("locality");
                 });
-                button(stage, "#save-button").fire();
-                assertTrue(warning.isDone());
-                warning.join();
+                var confirmation = answerDialog("重命名", dialog -> {
+                    assertEquals("确认重命名", dialog.getHeaderText());
+                    var affected = (ListView<?>) dialog.lookup(".list-view");
+                    assertTrue(affected.getItems().containsAll(java.util.List.of(
+                            "cache_locality.md", "matrix_blocking.md", "演示笔记.md")));
+                });
+                button(stage, "#rename-button").fire();
+                form.join();
+                confirmation.join();
+                assertEquals("局部性", title(stage).getText());
+                button(stage, "#graph-button").fire();
+                stage.getScene().getRoot().applyCss();
+                assertEquals("3 篇笔记 · 2 条关联", ((Label) stage.getScene().lookup("#graph-summary")).getText());
+                graphNode(stage, "局部性").fire();
+                fireBacklink(stage, "演示笔记");
                 return null;
             });
-            assertTrue(Files.readString(demo).contains("[[缓存局部性]]"));
+            assertTrue(Files.readString(demo).contains("[[./locality]]"));
             assertFalse(Files.readString(demo).contains("先保留"));
-            assertTrue(Files.readString(cache).contains("title: 局部性"));
+            assertTrue(Files.readString(matrix).contains("`[[缓存局部性]]`"));
+            assertFalse(Files.exists(cache));
+            var renamedNote = new MarkdownNoteRepository(vault).read(renamed);
+            assertEquals("局部性", renamedNote.title());
+            assertEquals(originalId, renamedNote.id());
 
             onFx(() -> {
                 app.openFile(demo);
+                editor(stage).appendText("\n\n[[未创建]]\n");
                 return null;
             });
-            await(() -> onFx(() -> previewLink(stage, "缓存局部性") != null));
+            await(() -> onFx(() -> previewLink(stage, "未创建") != null));
             CompletableFuture<Void> invalidLink = onFx(() -> {
 
-                clickPreview(stage, "缓存局部性");
+                clickPreview(stage, "未创建");
                 return answerDialog("确定", dialog -> assertEquals("无法打开链接", dialog.getHeaderText()));
             });
             invalidLink.get(10, TimeUnit.SECONDS);
 
             onFx(() -> {
-                title(stage).setText("中期演示");
-                editor(stage).setText(editor(stage).getText().replace("[[缓存局部性]]", "[[局部性]]"));
                 answerDialog("保存", dialog -> {});
                 stage.fireEvent(new WindowEvent(stage, WindowEvent.WINDOW_CLOSE_REQUEST));
                 assertFalse(stage.isShowing());
@@ -164,19 +182,19 @@ class DesktopSmokeTest {
                 reopened.openFile(demo);
                 restarted.getScene().getRoot().applyCss();
                 restarted.getScene().getRoot().layout();
-                assertEquals("中期演示", title(restarted).getText());
-                assertTrue(editor(restarted).getText().contains("[[局部性]]"));
+                assertEquals("演示笔记", title(restarted).getText());
+                assertTrue(editor(restarted).getText().contains("[[./locality]]"));
                 return null;
             });
-            await(() -> onFx(() -> previewLink(restarted, "局部性") != null));
+            await(() -> onFx(() -> previewLink(restarted, "./locality") != null));
             onFx(() -> {
-                clickPreview(restarted, "局部性");
+                clickPreview(restarted, "./locality");
                 return null;
             });
             await(() -> onFx(() -> title(restarted).getText().equals("局部性")));
             onFx(() -> {
-                fireBacklink(restarted, "中期演示");
-                assertEquals("中期演示", title(restarted).getText());
+                fireBacklink(restarted, "演示笔记");
+                assertEquals("演示笔记", title(restarted).getText());
                 restarted.close();
                 return null;
             });

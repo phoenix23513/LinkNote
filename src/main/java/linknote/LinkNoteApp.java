@@ -12,6 +12,7 @@ import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonBar;
 import javafx.scene.control.ButtonType;
+import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
@@ -26,6 +27,7 @@ import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyCodeCombination;
 import javafx.scene.input.KeyCombination;
 import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
@@ -40,6 +42,7 @@ import linknote.links.LinkIndex;
 import linknote.links.NoteCatalog;
 import linknote.model.Note;
 import linknote.storage.MarkdownNoteRepository;
+import linknote.storage.NoteRenameService;
 import linknote.ui.MarkdownPreview;
 import linknote.ui.NoteGraphView;
 import org.w3c.dom.Element;
@@ -67,6 +70,7 @@ public final class LinkNoteApp extends Application {
     private Label folderLabel;
     private Label status;
     private Button graphButton;
+    private Button renameButton;
     private Button saveButton;
     private NoteGraphView graph;
     private TitledPane backlinks;
@@ -77,6 +81,7 @@ public final class LinkNoteApp extends Application {
     private LinkIndex linkIndex;
     private Note currentNote;
     private boolean populating;
+    private boolean folderBlocked;
 
     public static void main(String[] args) {
         launch(args);
@@ -93,7 +98,6 @@ public final class LinkNoteApp extends Application {
                 connectPreviewLinks();
             }
         });
-        title.textProperty().addListener((property, oldValue, value) -> refreshDraftStatus());
         editor.textProperty().addListener((property, oldValue, value) -> {
             if (!populating && currentNote != null) {
                 refreshDraftStatus();
@@ -130,12 +134,14 @@ public final class LinkNoteApp extends Application {
         var open = button("打开文件", "open-button", this::chooseFile);
         var example = button("打开示例", "example-button", () -> openFile(SAMPLE_NOTE));
         var create = button("新建笔记", "new-button", this::chooseNewNote);
+        renameButton = button("重命名", "rename-button", this::chooseRename);
+        renameButton.setDisable(true);
         graphButton = button("图谱", "graph-button", this::toggleGraph);
         graphButton.setDisable(true);
         saveButton = button("保存", "save-button", this::saveCurrentNote);
         saveButton.getStyleClass().add("primary");
         saveButton.setDisable(true);
-        var toolbar = new HBox(9, brand, spacer, open, example, create, graphButton, saveButton);
+        var toolbar = new HBox(9, brand, spacer, open, example, create, renameButton, graphButton, saveButton);
         toolbar.setAlignment(Pos.CENTER_LEFT);
         toolbar.getStyleClass().add("toolbar");
 
@@ -196,6 +202,8 @@ public final class LinkNoteApp extends Application {
         title = new TextField();
         title.setId("note-title");
         title.setPromptText("笔记标题");
+        title.setEditable(false);
+        title.setTooltip(new Tooltip("用工具栏的「重命名」修改笔记标题或文件名。"));
         title.getStyleClass().add("note-title");
         editor = new TextArea();
         editor.setId("note-editor");
@@ -278,6 +286,9 @@ public final class LinkNoteApp extends Application {
         try {
             Path path = file.toAbsolutePath().normalize();
             var next = new MarkdownNoteRepository(path.getParent());
+            if (!confirmRecovery(next)) {
+                return;
+            }
             var scan = next.scanFolder();
             Path selected = path.toRealPath();
             var note = scan.notes().stream().filter(item -> item.path().equals(selected)).findFirst();
@@ -320,6 +331,9 @@ public final class LinkNoteApp extends Application {
         }
         try {
             var next = new MarkdownNoteRepository(directory);
+            if (!confirmRecovery(next)) {
+                return;
+            }
             var scan = next.scanFolder();
             Note created = next.create(newTitle);
             var updated = new ArrayList<>(scan.notes());
@@ -333,8 +347,131 @@ public final class LinkNoteApp extends Application {
         }
     }
 
+    private void chooseRename() {
+        if (folderBlocked || !confirmLeave()) {
+            return;
+        }
+        var newTitle = new TextField(currentNote.title());
+        newTitle.setId("rename-title");
+        String filename = currentNote.path().getFileName().toString();
+        var newStem = new TextField(filename.substring(0, filename.length() - 3));
+        newStem.setId("rename-filename");
+        var fields = new GridPane(10, 10);
+        fields.addRow(0, new Label("笔记标题"), newTitle);
+        fields.addRow(1, new Label("文件名"), new HBox(5, newStem, new Label(".md")));
+        var form = new Dialog<ButtonType>();
+        form.initOwner(stage);
+        form.setTitle("重命名笔记");
+        form.setHeaderText("修改标题或文件名");
+        form.getDialogPane().setContent(fields);
+        var inspect = new ButtonType("查看影响", ButtonBar.ButtonData.OK_DONE);
+        form.getDialogPane().getButtonTypes().addAll(inspect, ButtonType.CANCEL);
+        if (form.showAndWait().orElse(ButtonType.CANCEL) != inspect) {
+            return;
+        }
+
+        var renamer = new NoteRenameService(repository, markdown::wikiReferences);
+        NoteRenameService.Plan plan;
+        try {
+            plan = renamer.prepare(currentNote, newTitle.getText(), newStem.getText());
+        } catch (IOException failure) {
+            showMessage("无法生成重命名清单", failure.getMessage());
+            return;
+        }
+        var apply = new ButtonType("重命名", ButtonBar.ButtonData.OK_DONE);
+        var confirmation = new Alert(Alert.AlertType.CONFIRMATION, "", apply, ButtonType.CANCEL);
+        confirmation.initOwner(stage);
+        confirmation.setHeaderText("确认重命名");
+        var change = new Label(filename + " → " + plan.renamed().path().getFileName() + "\n" + plan.renamed().title());
+        change.setWrapText(true);
+        var files = new ListView<>(javafx.collections.FXCollections.observableArrayList(
+                plan.affectedFiles().stream().map(path -> path.getFileName().toString()).toList()));
+        files.setPrefHeight(Math.min(170, 32 * plan.affectedFiles().size() + 8));
+        var details = new VBox(8, change, new Label("将备份并更新以下文件"), files);
+        if (!plan.notice().isEmpty()) {
+            var notice = new Label(plan.notice());
+            notice.setWrapText(true);
+            details.getChildren().add(notice);
+        }
+        confirmation.getDialogPane().setContent(details);
+        confirmation.setResizable(true);
+        if (confirmation.showAndWait().orElse(ButtonType.CANCEL) != apply) {
+            return;
+        }
+
+        try {
+            renamer.commit(plan);
+        } catch (IOException failure) {
+            refreshAfterRenameFailure(renamer);
+            showMessage("重命名已停止", failure.getMessage());
+            return;
+        }
+        try {
+            reloadNote(plan.renamed());
+            status.setText("已重命名 · " + plan.renamed().path().getFileName());
+        } catch (IOException failure) {
+            blockFolder("已重命名，请重新打开新文件以刷新目录。");
+            showMessage("已重命名，目录待刷新", plan.renamed().path() + "\n" + failure.getMessage());
+        }
+    }
+
+    private boolean confirmRecovery(MarkdownNoteRepository next) throws IOException {
+        var renamer = new NoteRenameService(next, markdown::wikiReferences);
+        if (renamer.pendingOperations().isEmpty()) {
+            return true;
+        }
+        if (repository != null && repository.root().equals(next.root())) {
+            blockFolder("发现未完成的重命名，请重新打开此目录中的文件并恢复。");
+        }
+        var recover = new ButtonType("尝试恢复", ButtonBar.ButtonData.OK_DONE);
+        var prompt = new Alert(Alert.AlertType.CONFIRMATION, "恢复会核对磁盘文件与备份的版本。\n" + next.root(),
+                recover, ButtonType.CANCEL);
+        prompt.initOwner(stage);
+        prompt.setHeaderText("发现未完成的重命名");
+        if (prompt.showAndWait().orElse(ButtonType.CANCEL) != recover) {
+            return false;
+        }
+        renamer.recoverPending();
+        return true;
+    }
+
+    private void refreshAfterRenameFailure(NoteRenameService renamer) {
+        try {
+            if (!renamer.pendingOperations().isEmpty()) {
+                blockFolder("重命名待恢复，请重新打开此目录中的文件并按提示处理。");
+            } else if (!isDirty()) {
+                reloadNote(currentNote);
+            }
+        } catch (IOException failure) {
+            blockFolder("目录待刷新，请重新打开笔记。");
+        }
+    }
+
+    private void reloadNote(Note expected) throws IOException {
+        var scan = repository.scanFolder();
+        Note selected = scan.notes().stream().filter(note -> note.id().equals(expected.id()) && note.path().equals(expected.path()))
+                .findFirst().orElseThrow(() -> new IOException("找不到与笔记身份对应的文件。"));
+        showFolder(repository, scan.notes(), selected, scan.problems());
+    }
+
+    private void blockFolder(String message) {
+        folderBlocked = true;
+        showWorkspace();
+        renameButton.setDisable(true);
+        graphButton.setDisable(true);
+        saveButton.setDisable(true);
+        notes.setDisable(true);
+        backlinks.setDisable(true);
+        editor.setEditable(false);
+        status.setText(message);
+    }
+
     private void showFolder(MarkdownNoteRepository next, List<Note> items, Note selected, List<String> problems) {
         repository = next;
+        folderBlocked = false;
+        editor.setEditable(true);
+        notes.setDisable(false);
+        backlinks.setDisable(false);
         Path directory = next.root();
         String folder = directory.getFileName() == null ? directory.toString() : directory.getFileName().toString();
         folderLabel.setText(problems.isEmpty() ? folder : folder + " · " + problems.size() + " 篇未载入");
@@ -345,10 +482,14 @@ public final class LinkNoteApp extends Application {
         showWorkspace();
         rebuildLinks();
         graphButton.setDisable(false);
+        renameButton.setDisable(false);
         displayNote(selected);
     }
 
     private void openNote(Note listed) {
+        if (folderBlocked) {
+            return;
+        }
         if (listed.path().equals(currentNote.path())) {
             selectCurrent();
             showWorkspace();
@@ -394,12 +535,11 @@ public final class LinkNoteApp extends Application {
     }
 
     private boolean isDirty() {
-        return currentNote != null && (!currentNote.body().equals(editor.getText())
-                || !currentNote.title().equals(title.getText()));
+        return currentNote != null && !currentNote.body().equals(editor.getText());
     }
 
     private void refreshDraftStatus() {
-        if (!populating && currentNote != null) {
+        if (!populating && currentNote != null && !folderBlocked) {
             boolean dirty = isDirty();
             saveButton.setDisable(!dirty);
             status.setText((dirty ? "未保存修改 · " : "已保存 · ") + currentNote.path().getFileName());
@@ -407,37 +547,23 @@ public final class LinkNoteApp extends Application {
     }
 
     private boolean saveCurrentNote() {
+        if (folderBlocked) {
+            return false;
+        }
         if (!isDirty()) {
             return true;
         }
         try {
-            String oldTitle = currentNote.title();
-            currentNote = repository.save(currentNote, title.getText(), editor.getText());
+            currentNote = repository.save(currentNote, currentNote.title(), editor.getText());
             replaceListedNote(currentNote);
-            populating = true;
-            title.setText(currentNote.title());
-            populating = false;
             selectCurrent();
             refreshDraftStatus();
             showBacklinks();
-            if (!oldTitle.equals(currentNote.title())) {
-                remindOldReferences(oldTitle);
-            }
             return true;
         } catch (IOException exception) {
             status.setText("保存失败，草稿仍在编辑区");
             showMessage("保存失败", exception.getMessage());
             return false;
-        }
-    }
-
-    private void remindOldReferences(String oldTitle) {
-        var sources = linkIndex.referencesToTitle(oldTitle).stream()
-                .map(source -> source.title() + "（" + source.path().getFileName() + "）")
-                .toList();
-        if (!sources.isEmpty()) {
-            showMessage("旧引用需要手动更新", "以下笔记仍包含 [[" + oldTitle + "]]：\n"
-                    + String.join("\n", sources) + "\n\n请将旧引用改为 [[" + currentNote.title() + "]] 并保存。");
         }
     }
 
@@ -453,7 +579,7 @@ public final class LinkNoteApp extends Application {
     private void rebuildLinks() {
         var items = List.copyOf(notes.getItems());
         catalog = new NoteCatalog(repository.root(), items);
-        linkIndex = new LinkIndex(catalog, items, markdown::wikiTargets);
+        linkIndex = new LinkIndex(catalog, items, markdown::wikiReferences);
         if (view.getCenter() == graph) {
             graph.showGraph(items, linkIndex);
         }
@@ -534,6 +660,9 @@ public final class LinkNoteApp extends Application {
     }
 
     private void followLink(String target) {
+        if (folderBlocked) {
+            return;
+        }
         var resolution = catalog.resolve(target);
         if (resolution.match() == NoteCatalog.Match.FOUND) {
             openNote(resolution.note());

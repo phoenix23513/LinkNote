@@ -13,8 +13,9 @@ import com.vladsch.flexmark.html.renderer.NodeRendererContext;
 import com.vladsch.flexmark.html.renderer.NodeRenderingHandler;
 import com.vladsch.flexmark.parser.Parser;
 import com.vladsch.flexmark.util.data.MutableDataSet;
+import linknote.links.WikiReference;
 
-import java.util.LinkedHashSet;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
@@ -33,16 +34,20 @@ public final class MarkdownPreview {
     }
 
     public List<String> wikiTargets(String markdown) {
-        var targets = new LinkedHashSet<String>();
+        return wikiReferences(markdown).stream().map(WikiReference::target).distinct().toList();
+    }
+
+    public List<WikiReference> wikiReferences(String markdown) {
+        var references = new ArrayList<WikiReference>();
         for (var node : parser.parse(markdown).getDescendants()) {
             if (node instanceof WikiLink link) {
                 String target = wikiTarget(link);
                 if (!target.isEmpty()) {
-                    targets.add(target);
+                    references.add(new WikiReference(target, link.getStartOffset(), link.getEndOffset()));
                 }
             }
         }
-        return List.copyOf(targets);
+        return List.copyOf(references);
     }
 
     public String render(String markdown) {

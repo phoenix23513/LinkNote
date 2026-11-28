@@ -40,6 +40,7 @@ public final class MarkdownNoteRepository {
             Pattern.compile("\\A---[ \\t]*\\n(.*?)^---[ \\t]*(?:\\n|\\z)",
                     Pattern.MULTILINE | Pattern.DOTALL);
     private static final Pattern SCHEMA_MARKER = Pattern.compile("(?m)^schema_version\\s*:");
+    private static final Pattern RENAME_STEM = Pattern.compile("[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}");
     private static final Pattern UNSAFE_FILENAME = Pattern.compile("[\\\\/:*?\"<>|]");
     private static final Pattern WINDOWS_DEVICE =
             Pattern.compile("(?i)^(CON|PRN|AUX|NUL|COM[0-9¹²³]|LPT[0-9¹²³])(?:\\..*)?$");
@@ -166,18 +167,84 @@ public final class MarkdownNoteRepository {
             bytes = encode(fields, newBody);
         }
         Note saved = decode(path, bytes);
+        replaceContents(path, original.fingerprint(), bytes);
+        return saved;
+    }
 
+    Path renameDestination(Note original, String rawStem) throws IOException {
+        String oldName = original.path().getFileName().toString();
+        String oldStem = oldName.substring(0, oldName.length() - 3);
+        String stem = rawStem.strip();
+        if (rawStem.equals(oldStem) || stem.equals(oldStem)) {
+            return original.path();
+        }
+        if (!RENAME_STEM.matcher(stem).matches() || WINDOWS_DEVICE.matcher(stem).matches()) {
+            throw new IOException("新文件名须以英文字母或数字开头，最多 80 个字符，可使用字母、数字、短横线和下划线。");
+        }
+        String newName = stem + ".md";
+        if (oldName.equalsIgnoreCase(newName)) {
+            throw new IOException("暂不支持只改变文件名大小写。请使用不同的文件名。");
+        }
+        Path destination = root.resolve(newName);
+        requireVacant(destination);
+        return destination;
+    }
+
+    byte[] renameContents(Note note, String title, String body) throws IOException {
+        var fields = note.yaml() == null ? newNoteFields(note.id(), title) : metadata(note.yaml());
+        if (!fields.containsKey("schema_version")) {
+            newNoteFields(note.id(), title).forEach(fields::putIfAbsent);
+            fields.put("id", note.id().toString());
+            if (!"paper".equals(fields.get("type")) && !"note".equals(fields.get("type"))) {
+                fields.put("type", "note");
+            }
+        }
+        fields.put("title", title);
+        fields.put("updated_at", OffsetDateTime.now().toString());
+        return encode(fields, body);
+    }
+
+    byte[] snapshotBytes(Path path, String expected) throws IOException {
+        byte[] bytes = readBytes(checkedNotePath(path));
+        if (!fingerprint(bytes).equals(expected)) {
+            throw new ModifiedNoteException(path);
+        }
+        return bytes;
+    }
+
+    void replaceContents(Path path, String expected, byte[] bytes) throws IOException {
         Path temporaryFile = Files.createTempFile(path.getParent(), ".linknote-save-", ".tmp");
         try {
             Files.write(temporaryFile, bytes);
-            assertUnchanged(checkedNotePath(path), original.fingerprint());
+            assertUnchanged(checkedNotePath(path), expected);
             Files.move(temporaryFile, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         } catch (AtomicMoveNotSupportedException exception) {
             throw new IOException("该目录不支持安全替换。草稿仍在编辑区，请改用支持的本地目录。", exception);
         } finally {
             Files.deleteIfExists(temporaryFile);
         }
-        return saved;
+    }
+
+    void publishContents(Path path, byte[] bytes) throws IOException {
+        Path temporaryFile = Files.createTempFile(path.getParent(), ".linknote-save-", ".tmp");
+        try {
+            Files.write(temporaryFile, bytes);
+            Files.move(temporaryFile, path);
+        } finally {
+            Files.deleteIfExists(temporaryFile);
+        }
+    }
+
+    void deleteUnchanged(Path path, String expected) throws IOException {
+        Path checked = checkedNotePath(path);
+        assertUnchanged(checked, expected);
+        Files.delete(checked);
+    }
+
+    static void requireVacant(Path path) throws IOException {
+        if (!Files.notExists(path, LinkOption.NOFOLLOW_LINKS)) {
+            throw new FileAlreadyExistsException("目标文件名已占用或无法确认：" + path.getFileName());
+        }
     }
 
     private Path checkedNotePath(Path file) throws IOException {
@@ -207,7 +274,7 @@ public final class MarkdownNoteRepository {
         return name.endsWith(".md") && !name.startsWith(".linknote-save-") && !internalPath(file);
     }
 
-    private static String validTitle(String rawTitle) throws IOException {
+    static String validTitle(String rawTitle) throws IOException {
         String title = rawTitle.strip();
         if (title.isEmpty() || title.codePoints().anyMatch(Character::isISOControl)) {
             throw new IOException("请输入有效的笔记标题。");
@@ -236,6 +303,10 @@ public final class MarkdownNoteRepository {
             String yaml = new Dump(DumpSettings.builder().build()).dumpToString(fields);
             content = "---\n" + yaml + "---\n" + body;
         }
+        return encodeRaw(content);
+    }
+
+    static byte[] encodeRaw(String content) throws IOException {
         byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
         if (bytes.length > MAX_NOTE_BYTES) {
             throw new IOException("笔记超过 2 MiB，未保存。");
@@ -243,7 +314,7 @@ public final class MarkdownNoteRepository {
         return bytes;
     }
 
-    private static byte[] readBytes(Path path) throws IOException {
+    static byte[] readBytes(Path path) throws IOException {
         try (var input = Files.newInputStream(path)) {
             byte[] bytes = input.readNBytes(MAX_NOTE_BYTES + 1);
             if (bytes.length > MAX_NOTE_BYTES) {
@@ -255,11 +326,17 @@ public final class MarkdownNoteRepository {
 
     private static void assertUnchanged(Path file, String expected) throws IOException {
         if (!fingerprint(readBytes(file)).equals(expected)) {
-            throw new IOException("磁盘文件已被其他程序修改。请先复制草稿，再重新打开笔记。");
+            throw new ModifiedNoteException(file);
         }
     }
 
-    private static Note decode(Path path, byte[] bytes) throws IOException {
+    static final class ModifiedNoteException extends IOException {
+        ModifiedNoteException(Path path) {
+            super("磁盘文件已被其他程序修改：" + path.getFileName() + "。请重新打开文件后重试。");
+        }
+    }
+
+    static Note decode(Path path, byte[] bytes) throws IOException {
         String contents = StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(bytes)).toString()
                 .replace("\r\n", "\n").replace('\r', '\n');
         if (contents.startsWith("\uFEFF")) {
@@ -333,7 +410,7 @@ public final class MarkdownNoteRepository {
         }
     }
 
-    private static String fingerprint(byte[] bytes) {
+    static String fingerprint(byte[] bytes) {
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
         } catch (NoSuchAlgorithmException exception) {

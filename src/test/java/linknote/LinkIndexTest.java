@@ -30,7 +30,7 @@ class LinkIndexTest {
         var duplicateA = new Note(UUID.randomUUID(), "同名", root.resolve("same-a.md"), "", "", "");
         var duplicateB = new Note(UUID.randomUUID(), "同名", root.resolve("same-b.md"), "", "", "");
         var notes = List.of(source, target, codeTarget, duplicateA, duplicateB);
-        var index = new LinkIndex(new NoteCatalog(root, notes), notes, new MarkdownPreview()::wikiTargets);
+        var index = new LinkIndex(new NoteCatalog(root, notes), notes, new MarkdownPreview()::wikiReferences);
 
         var expected = Set.of(new LinkIndex.Edge(source.id(), target.id()), new LinkIndex.Edge(target.id(), source.id()),
                 new LinkIndex.Edge(source.id(), source.id()));
