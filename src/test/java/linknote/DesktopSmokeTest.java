@@ -49,6 +49,7 @@ class DesktopSmokeTest {
             onFx(() -> {
                 assertNotNull(stage.getScene().lookup("#welcome"));
                 assertTrue(button(stage, "#save-button").isDisabled());
+                assertTrue(button(stage, "#graph-button").isDisabled());
                 button(stage, "#example-button").fire();
                 assertEquals("矩阵分块", title(stage).getText());
                 return null;
@@ -56,6 +57,7 @@ class DesktopSmokeTest {
             onFx(() -> {
                 app.openFile(matrix);
                 assertTrue(title(stage).getText().equals("矩阵分块"));
+                verifyGraph(stage);
                 return null;
             });
             onFx(() -> {
@@ -191,6 +193,52 @@ class DesktopSmokeTest {
 
     private static Button button(Stage stage, String selector) {
         return (Button) stage.getScene().lookup(selector);
+    }
+
+    private static void verifyGraph(Stage stage) {
+        var toggle = button(stage, "#graph-button");
+        toggle.fire();
+        assertGraphSummary(stage, 1);
+        graphNode(stage, "缓存局部性").fire();
+        assertEquals("缓存局部性", title(stage).getText());
+        fireBacklink(stage, "矩阵分块");
+
+        String original = editor(stage).getText();
+        editor(stage).setText(original.replace("详见 [[缓存局部性]]", "详见缓存局部性"));
+        toggle.fire();
+        assertGraphSummary(stage, 1);
+        var keepEditing = answerDialog("继续编辑", dialog -> {});
+        graphNode(stage, "缓存局部性").fire();
+        keepEditing.join();
+        assertGraphSummary(stage, 1);
+
+        button(stage, "#save-button").fire();
+        assertGraphSummary(stage, 0);
+        graphNode(stage, "缓存局部性").fire();
+        assertEquals("引用此笔记", ((TitledPane) stage.getScene().lookup("#backlinks")).getText());
+
+        toggle.fire();
+        graphNode(stage, "矩阵分块").fire();
+        editor(stage).setText(original);
+        toggle.fire();
+        assertGraphSummary(stage, 0);
+        button(stage, "#save-button").fire();
+        assertGraphSummary(stage, 1);
+        graphNode(stage, "缓存局部性").fire();
+        fireBacklink(stage, "矩阵分块");
+    }
+
+    private static void assertGraphSummary(Stage stage, int edgeCount) {
+        var scene = stage.getScene();
+        scene.getRoot().applyCss();
+        scene.getRoot().layout();
+        assertEquals("2 篇笔记 · " + edgeCount + " 条关联", ((Label) scene.lookup("#graph-summary")).getText());
+        assertEquals(2, scene.getRoot().lookupAll(".graph-node").size());
+    }
+
+    private static Button graphNode(Stage stage, String title) {
+        return stage.getScene().getRoot().lookupAll(".graph-node").stream().map(Button.class::cast)
+                .filter(node -> node.getText().equals(title)).findFirst().orElseThrow();
     }
 
     private static void fireBacklink(Stage stage, String title) {

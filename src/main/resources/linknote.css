@@ -78,3 +78,13 @@
 #backlinks .scroll-pane .viewport > VBox { -fx-padding: 5px 4px; }
 .backlink-button { -fx-background-color: transparent; -fx-text-fill: #166044; -fx-padding: 4px 7px; }
 .backlink-button:hover { -fx-background-color: #edf4ef; -fx-underline: true; }
+.graph-header { -fx-padding: 4px 6px 12px; }
+.graph-scroll { -fx-background-color: #dce5dd; -fx-padding: 1px; }
+.graph-surface { -fx-background-color: #fbfcfa; }
+.graph-node {
+    -fx-font-weight: bold;
+    -fx-background-color: #e7f0e8;
+    -fx-border-color: #bbcfc1;
+    -fx-border-radius: 6px;
+}
+.graph-node:hover { -fx-background-color: #d9eadf; }

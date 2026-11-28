@@ -41,6 +41,7 @@ import linknote.links.NoteCatalog;
 import linknote.model.Note;
 import linknote.storage.MarkdownNoteRepository;
 import linknote.ui.MarkdownPreview;
+import linknote.ui.NoteGraphView;
 import org.w3c.dom.Element;
 import org.w3c.dom.events.EventTarget;
 
@@ -65,7 +66,9 @@ public final class LinkNoteApp extends Application {
     private WebView preview;
     private Label folderLabel;
     private Label status;
+    private Button graphButton;
     private Button saveButton;
+    private NoteGraphView graph;
     private TitledPane backlinks;
     private VBox backlinkEntries;
     private PauseTransition previewDelay;
@@ -127,10 +130,12 @@ public final class LinkNoteApp extends Application {
         var open = button("打开文件", "open-button", this::chooseFile);
         var example = button("打开示例", "example-button", () -> openFile(SAMPLE_NOTE));
         var create = button("新建笔记", "new-button", this::chooseNewNote);
+        graphButton = button("图谱", "graph-button", this::toggleGraph);
+        graphButton.setDisable(true);
         saveButton = button("保存", "save-button", this::saveCurrentNote);
         saveButton.getStyleClass().add("primary");
         saveButton.setDisable(true);
-        var toolbar = new HBox(9, brand, spacer, open, example, create, saveButton);
+        var toolbar = new HBox(9, brand, spacer, open, example, create, graphButton, saveButton);
         toolbar.setAlignment(Pos.CENTER_LEFT);
         toolbar.getStyleClass().add("toolbar");
 
@@ -150,6 +155,7 @@ public final class LinkNoteApp extends Application {
         status.setId("save-status");
         status.getStyleClass().add("status");
         workspace = buildWorkspace();
+        graph = new NoteGraphView(this::openNote);
         return new BorderPane(welcome, toolbar, null, status, null);
     }
 
@@ -336,14 +342,16 @@ public final class LinkNoteApp extends Application {
         populating = true;
         notes.getItems().setAll(items);
         populating = false;
+        showWorkspace();
         rebuildLinks();
-        view.setCenter(workspace);
+        graphButton.setDisable(false);
         displayNote(selected);
     }
 
     private void openNote(Note listed) {
         if (listed.path().equals(currentNote.path())) {
             selectCurrent();
+            showWorkspace();
             return;
         }
         if (!confirmLeave()) {
@@ -358,6 +366,7 @@ public final class LinkNoteApp extends Application {
             if (!read.fingerprint().equals(listed.fingerprint())) {
                 replaceListedNote(read);
             }
+            showWorkspace();
             displayNote(read);
         } catch (IOException exception) {
             selectCurrent();
@@ -445,6 +454,24 @@ public final class LinkNoteApp extends Application {
         var items = List.copyOf(notes.getItems());
         catalog = new NoteCatalog(repository.root(), items);
         linkIndex = new LinkIndex(catalog, items, markdown::wikiTargets);
+        if (view.getCenter() == graph) {
+            graph.showGraph(items, linkIndex);
+        }
+    }
+
+    private void toggleGraph() {
+        if (view.getCenter() == graph) {
+            showWorkspace();
+        } else {
+            graph.showGraph(notes.getItems(), linkIndex);
+            view.setCenter(graph);
+            graphButton.setText("返回编辑");
+        }
+    }
+
+    private void showWorkspace() {
+        view.setCenter(workspace);
+        graphButton.setText("图谱");
     }
 
     private void showBacklinks() {

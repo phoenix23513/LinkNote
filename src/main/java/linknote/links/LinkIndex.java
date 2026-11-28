@@ -2,15 +2,18 @@ package linknote.links;
 
 import linknote.model.Note;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.ArrayList;
 import java.util.UUID;
 import java.util.function.Function;
 
 /** All relationships are derived from saved Markdown in the current folder. */
 public final class LinkIndex {
+    public record Edge(UUID sourceId, UUID targetId) {
+    }
+
     private final Map<UUID, List<Note>> incoming = new HashMap<>();
     private final Map<String, List<Note>> titleReferences = new HashMap<>();
 
@@ -33,6 +36,12 @@ public final class LinkIndex {
 
     public List<Note> backlinks(Note target) {
         return List.copyOf(incoming.getOrDefault(target.id(), List.of()));
+    }
+
+    public List<Edge> edges() {
+        return incoming.entrySet().stream()
+                .flatMap(entry -> entry.getValue().stream().map(source -> new Edge(source.id(), entry.getKey())))
+                .toList();
     }
 
     public List<Note> referencesToTitle(String title) {
