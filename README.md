@@ -22,6 +22,7 @@ LinkNote 是一个用 Java 21 和 JavaFX 21 开发的本地 Markdown 笔记工�
 | 从空白页打开普通 UTF-8 `.md` | 没有 YAML 的笔记也能打开，默认标题取文件名 |
 | 新建笔记并编辑正文 | 可预览标题、加粗、列表、代码、表格、`$...$` 行内公式和 `$$...$$` 独立公式。保存后修改状态消失 |
 | 从 A 保存 `[[B]]` 并点开，使用 B 的反链返回 | B 的反链列出 A。删除 A 的链接并保存后，B 的对应反链消失。代码中的双链保持普通文本 |
+| 在左侧搜索「缓存」，再添加一个关键词 | 标题命中排在正文命中前，多个词都匹配才显示结果。列表展示文件名和正文片段，点击结果打开笔记。保存后立即更新 |
 | 打开 B，点「重命名」，输入标题和文件名并查看影响 | 确认后保留 B 的 UUID，将当前目录中已解析的引用改为新路径，例如 `[[./new-name]]`。重开后仍可以往返跳转，反链与图谱指向改名后的笔记 |
 | 编辑后尝试切换笔记或关闭应用 | 可选「保存」「放弃修改」「继续编辑」。保存失败时草稿仍留在编辑区 |
 | 应用打开时，用其他编辑器修改当前文件，再从 LinkNote 保存 | 出现磁盘修改提示，磁盘外部改动和编辑区草稿都保留 |
@@ -36,6 +37,7 @@ LinkNote 是一个用 Java 21 和 JavaFX 21 开发的本地 Markdown 笔记工�
 | 打开文件 | `LinkNoteApp.openFile` → `MarkdownNoteRepository.scanFolder` → `showFolder` | `Note` 是磁盘快照，JavaFX 控件保存编辑草稿。普通 Markdown 可用文件名作为标题 |
 | 保存 | `LinkNoteApp.saveCurrentNote` → `MarkdownNoteRepository.save` → `replaceListedNote` | 写入临时文件并核对原文件指纹，成功替换后才刷新已保存状态和反链 |
 | 双链与反链 | `MarkdownPreview` → `LinkNoteApp.followLink` → `NoteCatalog.resolve` → `openNote`，反链按钮直接打开 `LinkIndex` 给出的来源笔记 | 预览与反链共用相同的 Markdown 解析规则。前向跳转解析当前链接，反链从已保存的正文计算 |
+| 搜索 | `LinkNoteApp.refreshNoteList` → `NoteSearch.find` | 查当前目录的保存快照，依次按标题匹配词数、正文匹配词数和文件路径排列 |
 | 重命名 | `LinkNoteApp.chooseRename` → `NoteRenameService.prepare` / `commit` → `RenameJournal` | 先从已保存的正文生成影响清单，再备份并逐文件校验指纹。提交成功后从磁盘重建关系 |
 
 ## 测试

@@ -52,6 +52,16 @@
 .list-cell:filled:selected { -fx-background-color: #e3f0e7; }
 .list-title { -fx-font-weight: bold; -fx-text-fill: #283d34; }
 .list-filename { -fx-font-size: 11px; -fx-text-fill: #52685d; }
+.list-snippet { -fx-font-size: 11px; -fx-text-fill: #40594c; }
+.note-search {
+    -fx-background-color: #fbfcfa;
+    -fx-background-radius: 6px;
+    -fx-border-color: #dce5dd;
+    -fx-border-radius: 6px;
+    -fx-padding: 6px 8px;
+}
+.note-search:focused { -fx-border-color: #79a28c; }
+.button.clear-search { -fx-padding: 5px 8px; }
 .text-area {
     -fx-font-family: "Consolas";
     -fx-font-size: 15px;

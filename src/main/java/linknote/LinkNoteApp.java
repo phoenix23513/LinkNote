@@ -3,6 +3,7 @@ package linknote;
 import javafx.animation.PauseTransition;
 import javafx.application.Application;
 import javafx.application.Platform;
+import javafx.beans.binding.Bindings;
 import javafx.concurrent.Worker;
 import javafx.geometry.Orientation;
 import javafx.geometry.Pos;
@@ -41,6 +42,7 @@ import javafx.util.Duration;
 import linknote.links.LinkIndex;
 import linknote.links.NoteCatalog;
 import linknote.model.Note;
+import linknote.search.NoteSearch;
 import linknote.storage.MarkdownNoteRepository;
 import linknote.storage.NoteRenameService;
 import linknote.ui.MarkdownPreview;
@@ -63,7 +65,9 @@ public final class LinkNoteApp extends Application {
     private BorderPane view;
     private Node welcome;
     private Node workspace;
-    private ListView<Note> notes;
+    private ListView<NoteSearch.Result> notes;
+    private List<Note> savedNotes = List.of();
+    private TextField searchField;
     private TextField title;
     private TextArea editor;
     private WebView preview;
@@ -104,9 +108,9 @@ public final class LinkNoteApp extends Application {
                 previewDelay.playFromStart();
             }
         });
-        notes.getSelectionModel().selectedItemProperty().addListener((property, oldNote, note) -> {
-            if (!populating && note != null) {
-                openNote(note);
+        notes.getSelectionModel().selectedItemProperty().addListener((property, oldResult, result) -> {
+            if (!populating && result != null) {
+                openNote(result.note());
             }
         });
 
@@ -168,36 +172,76 @@ public final class LinkNoteApp extends Application {
     private Node buildWorkspace() {
         folderLabel = new Label();
         folderLabel.getStyleClass().add("secondary");
+        searchField = new TextField();
+        searchField.setId("note-search");
+        searchField.setPromptText("搜索标题和正文");
+        searchField.setAccessibleText("搜索标题和正文");
+        searchField.getStyleClass().add("note-search");
+        var clearSearch = button("×", "clear-search", searchField::clear);
+        clearSearch.setTooltip(new Tooltip("清除搜索"));
+        clearSearch.setAccessibleText("清除搜索");
+        clearSearch.getStyleClass().add("clear-search");
+        clearSearch.visibleProperty().bind(searchField.textProperty().isNotEmpty());
+        clearSearch.managedProperty().bind(clearSearch.visibleProperty());
+        HBox.setHgrow(searchField, Priority.ALWAYS);
+        var searchRow = new HBox(5, searchField, clearSearch);
+        searchRow.setAlignment(Pos.CENTER_LEFT);
+
         notes = new ListView<>();
         notes.setId("notes-list");
+        var noResults = new Label("没有符合条件的笔记");
+        noResults.getStyleClass().add("secondary");
+        notes.setPlaceholder(noResults);
+        searchField.textProperty().addListener((property, oldQuery, query) -> refreshNoteList());
+        searchField.setOnAction(event -> {
+            if (!notes.getItems().isEmpty()) {
+                openNote(notes.getItems().getFirst().note());
+            }
+        });
+        searchField.setOnKeyPressed(event -> {
+            if (event.getCode() == KeyCode.ESCAPE && !searchField.getText().isEmpty()) {
+                searchField.clear();
+                event.consume();
+            }
+        });
         notes.setCellFactory(list -> new ListCell<>() {
             private final Label name = new Label();
             private final Label filename = new Label();
-            private final VBox content = new VBox(3, name, filename);
+            private final Label snippet = new Label();
+            private final VBox content = new VBox(3, name, filename, snippet);
 
             {
                 name.getStyleClass().add("list-title");
                 filename.getStyleClass().add("list-filename");
+                snippet.getStyleClass().add("list-snippet");
+                snippet.setWrapText(true);
+                snippet.managedProperty().bind(snippet.visibleProperty());
+                for (Label label : List.of(name, filename, snippet)) {
+                    label.maxWidthProperty().bind(Bindings.max(0, widthProperty().subtract(20)));
+                }
             }
 
             @Override
-            protected void updateItem(Note note, boolean empty) {
-                super.updateItem(note, empty);
-                if (empty || note == null) {
+            protected void updateItem(NoteSearch.Result result, boolean empty) {
+                super.updateItem(result, empty);
+                if (empty || result == null) {
                     setGraphic(null);
                     setTooltip(null);
                 } else {
+                    Note note = result.note();
                     name.setText(note.title());
                     filename.setText(note.path().getFileName().toString());
+                    snippet.setText(result.snippet());
+                    snippet.setVisible(!result.snippet().isEmpty());
                     setGraphic(content);
-                    setTooltip(new Tooltip(note.title() + "\n" + note.path().getFileName()));
+                    setTooltip(new Tooltip(note.title() + "\n" + note.path()));
                 }
             }
         });
-        var library = section("笔记", folderLabel, notes);
+        var library = section("笔记", folderLabel, searchRow, notes);
         VBox.setVgrow(notes, Priority.ALWAYS);
         library.setPrefWidth(207);
-        library.setMinWidth(150);
+        library.setMinWidth(185);
 
         title = new TextField();
         title.setId("note-title");
@@ -461,29 +505,34 @@ public final class LinkNoteApp extends Application {
         graphButton.setDisable(true);
         saveButton.setDisable(true);
         notes.setDisable(true);
+        searchField.setDisable(true);
         backlinks.setDisable(true);
         editor.setEditable(false);
         status.setText(message);
     }
 
     private void showFolder(MarkdownNoteRepository next, List<Note> items, Note selected, List<String> problems) {
+        boolean differentFolder = repository == null || !repository.root().equals(next.root());
         repository = next;
+        savedNotes = List.copyOf(items);
         folderBlocked = false;
         editor.setEditable(true);
         notes.setDisable(false);
+        searchField.setDisable(false);
         backlinks.setDisable(false);
         Path directory = next.root();
         String folder = directory.getFileName() == null ? directory.toString() : directory.getFileName().toString();
         folderLabel.setText(problems.isEmpty() ? folder : folder + " · " + problems.size() + " 篇未载入");
         folderLabel.setTooltip(new Tooltip(directory + (problems.isEmpty() ? "" : "\n" + String.join("\n", problems))));
-        populating = true;
-        notes.getItems().setAll(items);
-        populating = false;
+        if (differentFolder) {
+            searchField.clear();
+        }
         showWorkspace();
         rebuildLinks();
         graphButton.setDisable(false);
         renameButton.setDisable(false);
         displayNote(selected);
+        refreshNoteList();
     }
 
     private void openNote(Note listed) {
@@ -529,9 +578,20 @@ public final class LinkNoteApp extends Application {
 
     private void selectCurrent() {
         populating = true;
-        notes.getItems().stream().filter(note -> note.path().equals(currentNote.path())).findFirst()
-                .ifPresent(notes.getSelectionModel()::select);
+        var selection = notes.getSelectionModel();
+        notes.getItems().stream().filter(result -> currentNote != null && result.note().id().equals(currentNote.id()))
+                .findFirst().ifPresentOrElse(selection::select, selection::clearSelection);
         populating = false;
+    }
+
+    private void refreshNoteList() {
+        if (folderBlocked) {
+            return;
+        }
+        populating = true;
+        notes.getItems().setAll(NoteSearch.find(savedNotes, searchField.getText()));
+        populating = false;
+        selectCurrent();
     }
 
     private boolean isDirty() {
@@ -556,7 +616,6 @@ public final class LinkNoteApp extends Application {
         try {
             currentNote = repository.save(currentNote, currentNote.title(), editor.getText());
             replaceListedNote(currentNote);
-            selectCurrent();
             refreshDraftStatus();
             showBacklinks();
             return true;
@@ -568,20 +627,20 @@ public final class LinkNoteApp extends Application {
     }
 
     private void replaceListedNote(Note saved) {
-        populating = true;
-        notes.getItems().removeIf(note -> note.path().equals(saved.path()));
-        notes.getItems().add(saved);
-        notes.getItems().sort(MarkdownNoteRepository.NOTE_ORDER);
-        populating = false;
+        var updated = new ArrayList<>(savedNotes);
+        updated.removeIf(note -> note.path().equals(saved.path()));
+        updated.add(saved);
+        updated.sort(MarkdownNoteRepository.NOTE_ORDER);
+        savedNotes = List.copyOf(updated);
         rebuildLinks();
+        refreshNoteList();
     }
 
     private void rebuildLinks() {
-        var items = List.copyOf(notes.getItems());
-        catalog = new NoteCatalog(repository.root(), items);
-        linkIndex = new LinkIndex(catalog, items, markdown::wikiReferences);
+        catalog = new NoteCatalog(repository.root(), savedNotes);
+        linkIndex = new LinkIndex(catalog, savedNotes, markdown::wikiReferences);
         if (view.getCenter() == graph) {
-            graph.showGraph(items, linkIndex);
+            graph.showGraph(savedNotes, linkIndex);
         }
     }
 
@@ -589,7 +648,7 @@ public final class LinkNoteApp extends Application {
         if (view.getCenter() == graph) {
             showWorkspace();
         } else {
-            graph.showGraph(notes.getItems(), linkIndex);
+            graph.showGraph(savedNotes, linkIndex);
             view.setCenter(graph);
             graphButton.setText("返回编辑");
         }

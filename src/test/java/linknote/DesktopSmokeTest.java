@@ -13,6 +13,7 @@ import javafx.scene.web.WebView;
 import javafx.stage.Stage;
 import javafx.stage.Window;
 import javafx.stage.WindowEvent;
+import linknote.search.NoteSearch;
 import linknote.storage.MarkdownNoteRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
@@ -23,6 +24,7 @@ import org.w3c.dom.events.EventTarget;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -35,7 +37,7 @@ class DesktopSmokeTest {
     Path vault;
 
     @Test
-    void demonstratesNewNoteMathNavigationRenameAndReopen() throws Exception {
+    void demonstratesNewNoteMathSearchNavigationRenameAndReopen() throws Exception {
         Path sample = Path.of("sample_vault", "notes");
         Path matrix = Files.copy(sample.resolve("matrix_blocking.md"), vault.resolve("matrix_blocking.md"));
         Path cache = Files.copy(sample.resolve("cache_locality.md"), vault.resolve("cache_locality.md"));
@@ -54,12 +56,15 @@ class DesktopSmokeTest {
                 assertTrue(button(stage, "#graph-button").isDisabled());
                 button(stage, "#example-button").fire();
                 assertEquals("矩阵分块", title(stage).getText());
+                search(stage).setText("缓存");
                 return null;
             });
             onFx(() -> {
                 app.openFile(matrix);
                 assertTrue(title(stage).getText().equals("矩阵分块"));
+                assertTrue(search(stage).getText().isEmpty());
                 verifyGraph(stage);
+                verifySearch(stage);
                 return null;
             });
             onFx(() -> {
@@ -211,6 +216,61 @@ class DesktopSmokeTest {
 
     private static Button button(Stage stage, String selector) {
         return (Button) stage.getScene().lookup(selector);
+    }
+
+    private static void verifySearch(Stage stage) {
+        TextField search = search(stage);
+        var results = searchResults(stage);
+        search.setText("缓存");
+        assertEquals(List.of("缓存局部性", "矩阵分块"), resultTitles(results));
+        assertEquals("矩阵分块", title(stage).getText());
+
+        editor(stage).appendText("\n切换结果前的草稿");
+        search.setText("时间局部性");
+        assertEquals(List.of("缓存局部性"), resultTitles(results));
+        var keepEditing = answerDialog("继续编辑", dialog -> {});
+        results.getSelectionModel().selectFirst();
+        keepEditing.join();
+        assertEquals("矩阵分块", title(stage).getText());
+        assertTrue(editor(stage).getText().contains("切换结果前的草稿"));
+        assertNull(results.getSelectionModel().getSelectedItem());
+
+        var discard = answerDialog("放弃修改", dialog -> {});
+        results.getSelectionModel().selectFirst();
+        discard.join();
+        assertEquals("缓存局部性", title(stage).getText());
+        button(stage, "#graph-button").fire();
+        assertGraphSummary(stage, 1);
+        graphNode(stage, "矩阵分块").fire();
+        assertEquals("矩阵分块", title(stage).getText());
+
+        String savedBody = editor(stage).getText();
+        editor(stage).appendText("\n\n课堂验收唯一词");
+        search.setText("课堂验收唯一词");
+        assertTrue(results.getItems().isEmpty());
+        button(stage, "#save-button").fire();
+        assertEquals(List.of("矩阵分块"), resultTitles(results));
+        assertTrue(((NoteSearch.Result) results.getItems().getFirst()).snippet().contains("课堂验收唯一词"));
+
+        editor(stage).setText(savedBody);
+        assertEquals(List.of("矩阵分块"), resultTitles(results));
+        button(stage, "#save-button").fire();
+        assertTrue(results.getItems().isEmpty());
+        button(stage, "#clear-search").fire();
+        assertTrue(search.getText().isEmpty());
+        assertEquals(2, results.getItems().size());
+    }
+
+    private static TextField search(Stage stage) {
+        return (TextField) stage.getScene().lookup("#note-search");
+    }
+
+    private static ListView<?> searchResults(Stage stage) {
+        return (ListView<?>) stage.getScene().lookup("#notes-list");
+    }
+
+    private static List<String> resultTitles(ListView<?> results) {
+        return results.getItems().stream().map(NoteSearch.Result.class::cast).map(result -> result.note().title()).toList();
     }
 
     private static void verifyGraph(Stage stage) {
