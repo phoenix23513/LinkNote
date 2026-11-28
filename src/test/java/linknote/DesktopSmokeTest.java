@@ -22,6 +22,7 @@ import org.w3c.dom.Element;
 import org.w3c.dom.events.DocumentEvent;
 import org.w3c.dom.events.EventTarget;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -65,6 +66,8 @@ class DesktopSmokeTest {
                 assertTrue(search(stage).getText().isEmpty());
                 verifyGraph(stage);
                 verifySearch(stage);
+                verifyLegacyRenameProtection(app, stage);
+                app.openFile(matrix);
                 return null;
             });
             onFx(() -> {
@@ -91,6 +94,8 @@ class DesktopSmokeTest {
 
                         [[缓存局部性]]
 
+                        HTML 代码示例 <code>[[缓存局部性]]</code>。
+
                         `[[代码不跳转]] $x$`
                         """);
                 assertTrue(((Label) stage.getScene().lookup("#save-status")).getText().contains("未保存"));
@@ -108,6 +113,7 @@ class DesktopSmokeTest {
                     && document.querySelector(".math-error")?.textContent.includes("notAnActualCommand")
                     && !!document.querySelector("code")
                     && document.fonts.check("16px KaTeX_Main")
+                    && document.querySelectorAll('[data-linknote-target="缓存局部性"]').length === 1
                     """))));
 
             onFx(() -> {
@@ -127,8 +133,11 @@ class DesktopSmokeTest {
                 stage.fireEvent(new WindowEvent(stage, WindowEvent.WINDOW_CLOSE_REQUEST));
                 assertTrue(stage.isShowing());
                 assertTrue(editor(stage).getText().contains("先保留"));
-                answerDialog("放弃修改", dialog -> {});
-                app.openFile(cache);
+                search(stage).setText("时间局部性");
+                assertEquals(List.of("缓存局部性"), resultTitles(searchResults(stage)));
+                var discard = answerDialog("放弃修改", dialog -> {});
+                searchResults(stage).getSelectionModel().selectFirst();
+                discard.join();
                 assertEquals("缓存局部性", title(stage).getText());
 
                 var form = answerDialog("查看影响", dialog -> {
@@ -145,6 +154,7 @@ class DesktopSmokeTest {
                 form.join();
                 confirmation.join();
                 assertEquals("局部性", title(stage).getText());
+                assertEquals(List.of("局部性"), resultTitles(searchResults(stage)));
                 button(stage, "#graph-button").fire();
                 stage.getScene().getRoot().applyCss();
                 assertEquals("3 篇笔记 · 2 条关联", ((Label) stage.getScene().lookup("#graph-summary")).getText());
@@ -152,8 +162,10 @@ class DesktopSmokeTest {
                 fireBacklink(stage, "演示笔记");
                 return null;
             });
-            assertTrue(Files.readString(demo).contains("[[./locality]]"));
-            assertFalse(Files.readString(demo).contains("先保留"));
+            String updatedDemo = Files.readString(demo);
+            assertTrue(updatedDemo.contains("[[./locality]]"));
+            assertTrue(updatedDemo.contains("<code>[[缓存局部性]]</code>"));
+            assertFalse(updatedDemo.contains("先保留"));
             assertTrue(Files.readString(matrix).contains("`[[缓存局部性]]`"));
             assertFalse(Files.exists(cache));
             var renamedNote = new MarkdownNoteRepository(vault).read(renamed);
@@ -216,6 +228,45 @@ class DesktopSmokeTest {
 
     private static Button button(Stage stage, String selector) {
         return (Button) stage.getScene().lookup(selector);
+    }
+
+    private void verifyLegacyRenameProtection(LinkNoteApp app, Stage stage) throws IOException {
+        Path folder = Files.createDirectory(vault.resolve("external-vault"));
+        String original = "---\ntitle: Legacy notes\nid: course-credit\ntype: reading-log\n---\n原始课程笔记\n";
+        Path target = Files.writeString(folder.resolve("legacy.md"), original);
+        String reference = "学习笔记引用 [[Legacy notes]]\n";
+        Path source = Files.writeString(folder.resolve("source.md"), reference);
+
+        app.openFile(source);
+        search(stage).setText("Legacy notes");
+        assertEquals(List.of("Legacy notes", "source"), resultTitles(searchResults(stage)));
+        searchResults(stage).getSelectionModel().selectFirst();
+        assertEquals("Legacy notes", title(stage).getText());
+
+        var form = answerDialog("查看影响", dialog -> {
+            ((TextField) dialog.lookup("#rename-title")).setText("Renamed");
+            ((TextField) dialog.lookup("#rename-filename")).setText("renamed");
+        });
+        var warning = answerDialog("确定", dialog -> {
+            assertEquals("无法生成重命名清单", dialog.getHeaderText());
+            assertTrue(dialog.getContentText().contains("id"));
+            assertTrue(dialog.getContentText().contains("type"));
+        });
+        button(stage, "#rename-button").fire();
+        form.join();
+        warning.join();
+        assertEquals("Legacy notes", title(stage).getText());
+        assertEquals(original, Files.readString(target));
+        assertEquals(reference, Files.readString(source));
+        assertFalse(Files.exists(folder.resolve("renamed.md")));
+
+        search(stage).setText("Renamed");
+        assertTrue(searchResults(stage).getItems().isEmpty());
+        button(stage, "#graph-button").fire();
+        assertGraphSummary(stage, 1);
+        graphNode(stage, "Legacy notes").fire();
+        fireBacklink(stage, "source");
+        assertEquals("source", title(stage).getText());
     }
 
     private static void verifySearch(Stage stage) {

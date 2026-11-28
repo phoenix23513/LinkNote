@@ -86,17 +86,47 @@ class NoteRenameServiceTest {
     }
 
     @Test
+    void refusesToOverwriteLegacyMetadataBeforeChangingAnyFile() throws IOException {
+        String external = "---\ntitle: Legacy note\nid: external-citation-23\ntype: research-article\ncustom: preserve-me\n---\n正文\n";
+        Path target = write("legacy.md", external);
+        Path source = write("source.md", "前言 [[Legacy note]]\n");
+        var repository = new MarkdownNoteRepository(vault);
+        var original = repository.read(target);
+        var renamer = service(repository);
+
+        IOException conflict = assertThrows(IOException.class, () -> renamer.prepare(original, "Renamed", "renamed"));
+
+        assertTrue(conflict.getMessage().contains("id"));
+        assertTrue(conflict.getMessage().contains("type"));
+        assertEquals(external, Files.readString(target));
+        assertEquals("前言 [[Legacy note]]\n", Files.readString(source));
+        assertFalse(Files.exists(vault.resolve("renamed.md")));
+        assertFalse(Files.exists(vault.resolve(".linknote")));
+        assertEquals(original.id(), repository.read(target).id());
+
+        repository.save(original, original.title(), "正文仍能保存");
+        var reopened = repository.read(target);
+        assertTrue(reopened.yaml().contains("id: external-citation-23"));
+        assertTrue(reopened.yaml().contains("type: research-article"));
+        assertEquals("正文仍能保存", reopened.body());
+    }
+
+    @Test
     void updatesExplicitPathsWithoutClaimingAmbiguousTitleLinks() throws IOException {
-        Path target = write("a.md", "---\ntitle: 同名\ncustom: 保留\n---\n原正文\n");
+        Path target = write("a.md", "---\ntitle: 同名\ntype: paper\ncustom: 保留\n---\n原正文\n");
         write("b.md", "---\ntitle: 同名\n---\n另一个笔记\n");
         Path source = write("source.md", "[[同名]] 和 [[./a]]\n");
         var repository = new MarkdownNoteRepository(vault);
         var service = service(repository);
-        var plan = service.prepare(repository.read(target), "精确标题", "new-a");
+        var original = repository.read(target);
+        var plan = service.prepare(original, "精确标题", "new-a");
         assertTrue(plan.notice().contains("同名"));
         service.commit(plan);
         assertEquals("[[同名]] 和 [[./new-a]]\n", Files.readString(source));
-        assertTrue(repository.read(vault.resolve("new-a.md")).yaml().contains("custom: 保留"));
+        var renamed = repository.read(vault.resolve("new-a.md"));
+        assertEquals(original.id(), renamed.id());
+        assertTrue(renamed.yaml().contains("type: paper"));
+        assertTrue(renamed.yaml().contains("custom: 保留"));
     }
 
     @Test

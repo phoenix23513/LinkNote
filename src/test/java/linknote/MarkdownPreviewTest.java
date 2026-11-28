@@ -66,4 +66,39 @@ class MarkdownPreviewTest {
         assertFalse(html.contains("https://example.invalid/example.png"));
         assertTrue(html.contains("示例"));
     }
+
+    @Test
+    void treatsWikiLinksInsideHtmlAsLiteralInBothPreviewAndIndex() {
+        String markdown = """
+                正常 [[A]] <CoDe>**[[B]]**</cOdE> <span><em>[[C]]</em></span> <br> [[D]] <tag/> [[E]]。
+
+                <pre>
+                [[F]]
+                </pre>
+
+                正常 [[G]]。
+                """;
+
+        assertEquals(List.of("A", "D", "E", "G"), preview.wikiTargets(markdown));
+        String html = preview.render(markdown);
+        assertTrue(html.contains("[[B]]"));
+        assertTrue(html.contains("[[C]]"));
+        assertTrue(html.contains("[[F]]"));
+        assertEquals(4, html.split("data-linknote-target=\"", -1).length - 1);
+    }
+
+    @Test
+    void keepsLaterMarkdownBlocksAndTableCellsOutsideUnclosedInlineHtml() {
+        String markdown = """
+                # 标题 <code>[[标题代码]]
+
+                正文 [[正文链接]]。
+
+                | 左边 | 右边 |
+                | --- | --- |
+                | <code>[[表格代码]] | [[表格链接]] |
+                """;
+
+        assertEquals(List.of("正文链接", "表格链接"), preview.wikiTargets(markdown));
+    }
 }

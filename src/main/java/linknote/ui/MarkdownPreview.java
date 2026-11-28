@@ -1,7 +1,10 @@
 package linknote.ui;
 
+import com.vladsch.flexmark.ast.HtmlInline;
 import com.vladsch.flexmark.ast.Image;
 import com.vladsch.flexmark.ast.ImageRef;
+import com.vladsch.flexmark.ast.Text;
+import com.vladsch.flexmark.ext.tables.TableCell;
 import com.vladsch.flexmark.ext.tables.TablesExtension;
 import com.vladsch.flexmark.ext.wikilink.WikiImage;
 import com.vladsch.flexmark.ext.wikilink.WikiLink;
@@ -12,14 +15,22 @@ import com.vladsch.flexmark.html.renderer.NodeRenderer;
 import com.vladsch.flexmark.html.renderer.NodeRendererContext;
 import com.vladsch.flexmark.html.renderer.NodeRenderingHandler;
 import com.vladsch.flexmark.parser.Parser;
+import com.vladsch.flexmark.util.ast.Block;
+import com.vladsch.flexmark.util.ast.Document;
 import com.vladsch.flexmark.util.data.MutableDataSet;
 import linknote.links.WikiReference;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 public final class MarkdownPreview {
+    private static final Pattern HTML_TAG = Pattern.compile("<(/?)([a-zA-Z][a-zA-Z0-9-]*)(?=\\s|/?>)");
+    private static final Set<String> VOID_TAGS = Set.of("area", "base", "br", "col", "embed", "hr", "img", "input",
+            "link", "meta", "param", "source", "track", "wbr");
     private final Parser parser;
     private final HtmlRenderer renderer;
 
@@ -39,7 +50,7 @@ public final class MarkdownPreview {
 
     public List<WikiReference> wikiReferences(String markdown) {
         var references = new ArrayList<WikiReference>();
-        for (var node : parser.parse(markdown).getDescendants()) {
+        for (var node : parse(markdown).getDescendants()) {
             if (node instanceof WikiLink link) {
                 String target = wikiTarget(link);
                 if (!target.isEmpty()) {
@@ -51,7 +62,7 @@ public final class MarkdownPreview {
     }
 
     public String render(String markdown) {
-        String body = renderer.render(parser.parse(markdown));
+        String body = renderer.render(parse(markdown));
         boolean hasMath = body.contains("class=\"math-inline\"") || body.contains("class=\"math-display\"");
         String policy = hasMath ? KaTeXAssets.policy() : "default-src 'none'; style-src 'unsafe-inline'";
         return """
@@ -78,6 +89,45 @@ public final class MarkdownPreview {
                 </style></head><body>
                 %s%s</body></html>
                 """.formatted(policy, hasMath ? KaTeXAssets.style() : "", body, hasMath ? KaTeXAssets.script() : "");
+    }
+
+    private Document parse(String markdown) {
+        Document document = parser.parse(markdown);
+        if (markdown.indexOf('<') < 0) {
+            return document;
+        }
+        var openTags = new ArrayDeque<String>();
+        var literalLinks = new ArrayList<WikiLink>();
+        // Inline tags and the text they enclose are separate nodes in the Markdown tree.
+        for (var node : document.getDescendants()) {
+            if (node instanceof Block || node instanceof TableCell) {
+                openTags.clear();
+            } else if (node instanceof HtmlInline html) {
+                updateHtmlScope(openTags, html.getChars().toString());
+            } else if (!openTags.isEmpty() && node instanceof WikiLink link) {
+                literalLinks.add(link);
+            }
+        }
+        for (WikiLink link : literalLinks) {
+            link.insertBefore(new Text(link.getChars()));
+            link.unlink();
+        }
+        return document;
+    }
+
+    private static void updateHtmlScope(ArrayDeque<String> openTags, String source) {
+        var matcher = HTML_TAG.matcher(source);
+        if (!matcher.lookingAt()) {
+            return;
+        }
+        String name = matcher.group(2).toLowerCase(Locale.ROOT);
+        if (!matcher.group(1).isEmpty()) {
+            if (name.equals(openTags.peek())) {
+                openTags.pop();
+            }
+        } else if (!source.endsWith("/>") && !VOID_TAGS.contains(name)) {
+            openTags.push(name);
+        }
     }
 
     private static String wikiTarget(WikiLink link) {

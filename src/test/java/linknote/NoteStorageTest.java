@@ -1,13 +1,17 @@
 package linknote;
 
+import linknote.links.LinkIndex;
 import linknote.links.NoteCatalog;
+import linknote.search.NoteSearch;
 import linknote.storage.MarkdownNoteRepository;
+import linknote.ui.MarkdownPreview;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -66,6 +70,29 @@ class NoteStorageTest {
         assertEquals(id, scan.notes().getFirst().id());
         assertEquals(3, scan.problems().size());
         assertTrue(scan.problems().stream().noneMatch(message -> message.contains("backup")));
+    }
+
+    @Test
+    void excludesRootAssetsBeforeBuildingTheCatalogSearchAndRelations() throws IOException {
+        UUID id = UUID.randomUUID();
+        Path ordinary = create("ordinary.md", id, "普通笔记", "[[课程笔记]]");
+        create("assets/attachments/dupe.md", id, "附件备份", "仅附件出现的词 [[普通笔记]]");
+        Path attachment = create("assets/attachment.md", UUID.randomUUID(), "附件正文", "仅附件出现的词 [[普通笔记]]");
+        Path nested = create("notes/assets/course.md", UUID.randomUUID(), "课程笔记", "正常子目录的内容");
+        var repository = new MarkdownNoteRepository(vault);
+
+        var scan = repository.scan();
+        var notes = scan.notes();
+        var catalog = new NoteCatalog(repository.root(), notes);
+        var index = new LinkIndex(catalog, notes, new MarkdownPreview()::wikiReferences);
+
+        assertTrue(scan.problems().isEmpty(), "附件中的同 UUID 文件不应影响笔记");
+        assertEquals(Set.of(ordinary, nested), Set.copyOf(notes.stream().map(note -> note.path()).toList()));
+        assertTrue(NoteSearch.find(notes, "仅附件出现的词").isEmpty());
+        assertEquals(NoteCatalog.Match.MISSING, catalog.resolve("附件正文").match());
+        assertEquals(1, index.edges().size());
+        assertEquals(ordinary, index.backlinks(repository.read(nested)).getFirst().path());
+        assertThrows(IOException.class, () -> repository.read(attachment));
     }
 
     @Test

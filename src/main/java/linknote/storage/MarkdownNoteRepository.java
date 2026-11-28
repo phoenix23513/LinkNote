@@ -81,7 +81,7 @@ public final class MarkdownNoteRepository {
         Files.walkFileTree(root, Set.of(), depth, new SimpleFileVisitor<>() {
             @Override
             public FileVisitResult preVisitDirectory(Path directory, BasicFileAttributes attributes) {
-                return directory.equals(root) || !internalPath(directory)
+                return directory.equals(root) || !excludedVaultPath(directory)
                         ? FileVisitResult.CONTINUE : FileVisitResult.SKIP_SUBTREE;
             }
 
@@ -99,7 +99,9 @@ public final class MarkdownNoteRepository {
 
             @Override
             public FileVisitResult visitFileFailed(Path file, IOException exception) {
-                problems.add(root.relativize(file) + " · 无法读取");
+                if (!excludedVaultPath(file)) {
+                    problems.add(root.relativize(file) + " · 无法读取");
+                }
                 return FileVisitResult.CONTINUE;
             }
         });
@@ -193,11 +195,19 @@ public final class MarkdownNoteRepository {
     byte[] renameContents(Note note, String title, String body) throws IOException {
         var fields = note.yaml() == null ? newNoteFields(note.id(), title) : metadata(note.yaml());
         if (!fields.containsKey("schema_version")) {
-            newNoteFields(note.id(), title).forEach(fields::putIfAbsent);
-            fields.put("id", note.id().toString());
-            if (!"paper".equals(fields.get("type")) && !"note".equals(fields.get("type"))) {
-                fields.put("type", "note");
+            var conflicts = new ArrayList<String>();
+            if (fields.containsKey("id")
+                    && !(fields.get("id") instanceof String id && note.id().toString().equalsIgnoreCase(id))) {
+                conflicts.add("id");
             }
+            if (fields.containsKey("type") && !supportedType(fields.get("type"))) {
+                conflicts.add("type");
+            }
+            if (!conflicts.isEmpty()) {
+                throw new IOException("外部 Markdown 的 YAML 字段与 LinkNote 格式冲突："
+                        + String.join("、", conflicts) + "。原文件及字段已保留，请先处理字段冲突。");
+            }
+            newNoteFields(note.id(), title).forEach(fields::putIfAbsent);
         }
         fields.put("title", title);
         fields.put("updated_at", OffsetDateTime.now().toString());
@@ -271,7 +281,12 @@ public final class MarkdownNoteRepository {
 
     private boolean isNotePath(Path file) {
         String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
-        return name.endsWith(".md") && !name.startsWith(".linknote-save-") && !internalPath(file);
+        return name.endsWith(".md") && !name.startsWith(".linknote-save-") && !excludedVaultPath(file);
+    }
+
+    private boolean excludedVaultPath(Path path) {
+        Path relative = root.relativize(path);
+        return internalPath(path) || (relative.getNameCount() > 0 && "assets".equalsIgnoreCase(relative.getName(0).toString()));
     }
 
     static String validTitle(String rawTitle) throws IOException {
@@ -373,7 +388,7 @@ public final class MarkdownNoteRepository {
                 throw new IOException("只支持 schema_version 为 1 的笔记。");
             }
             Object type = fields.get("type");
-            if (!"note".equals(type) && !"paper".equals(type)) {
+            if (!supportedType(type)) {
                 throw new IOException("笔记 type 必须是 note 或 paper。");
             }
             if (!(fieldTitle instanceof String named) || named.isBlank()) {
@@ -390,6 +405,10 @@ public final class MarkdownNoteRepository {
             }
         }
         return new Note(id, title, path, yaml, contents.substring(header.end()), fingerprint);
+    }
+
+    private static boolean supportedType(Object type) {
+        return "note".equals(type) || "paper".equals(type);
     }
 
     private static Map<String, Object> metadata(String yaml) throws IOException {
